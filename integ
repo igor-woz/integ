@@ -1,0 +1,137 @@
+#!/bin/bash 
+
+# define environmental variables
+    TRACKER="PATH/TO/FILE/STORING/MONITORED/FILES"
+    PATH_TO_TARGET=""
+    MODE=""
+
+
+fatal() {
+    echo '[fatal]' "$@" >&2
+    exit 1
+}
+
+usage() {
+    cat <<-EOF
+	Usage: $(basename "$0")  -m [track | check | update] -f <filename>
+
+	This script processes text files and prints execution updates.
+
+	Options:
+	  -h    Show this help message and exit
+      -m    Mode in which command will operate
+	  -f    Specify the input file path 
+
+	EOF
+}
+
+trackfile() {
+    local file="$1"
+    local inode="$(ls -i "$file" | awk '{print $1}')"
+    local hash="$2"
+    local tracked="$(grep -c "$inode" "$TRACKER")"
+
+    if [[ "$tracked" != 0 ]]; then
+        echo "[result]: file $file is already monitored"
+        exit 0
+    else
+        echo "$hash" "$inode" "$file" >> $TRACKER
+        echo "[result]: file $file added to integrity monitoring"
+        exit 0
+    fi
+}
+
+checkfile() {
+    local file="$1"
+    local inode="$(ls -i "$file" | awk '{print $1}')"
+    local hash="$2"
+    local tracked="$(grep -c "$inode" "$TRACKER")"
+
+    if [[ "$tracked" == 0 ]]; then
+        fatal 'file '"$file"' is not monitored'
+    else
+        local tracked_hash="$(grep "$inode" "$TRACKER" | awk '{print $1;}')"
+        if [[ $hash == $tracked_hash ]]; then
+            echo "[result]: integrity confirmed! file $file was not altered"
+            exit 0
+        else 
+            echo "[result]: hashes for file $file differ! investigate the change"
+            exit 0
+        fi
+    fi
+}
+
+updatefile() {
+    local file="$1"
+    local inode="$(ls -i "$file" | awk '{print $1}')"
+    local hash="$2"
+    local tracked="$(grep -c "$inode" "$TRACKER")"
+
+    if [[ "$tracked" == 0 ]]; then
+        fatal 'file '"$file"' is not monitored'
+    else
+        local line_num=$(grep -n -m 1 "$inode" "$TRACKER" | cut -d: -f1)
+        sed -i '' "${line_num}d" "$TRACKER"
+        echo "$hash" "$inode" "$file" >> $TRACKER
+        echo "[result]: file $file hash updated"
+        exit 0
+    fi
+
+
+
+
+
+}
+
+main() {
+    # check if the script is executed in priviliged mode
+    if [[ "$(id -u)" -ne 0 ]]; then
+      fatal 'please run with sudo'
+    fi
+
+    local OPTIND OPTARG opt
+    while getopts ":hm:f:" opt; do
+        case $opt in
+            h) 
+                usage
+                exit 0
+                ;;
+            f)
+                PATH_TO_TARGET="$OPTARG"
+                ;;
+            m)
+                MODE="$OPTARG"
+                ;;
+            \?)
+                fatal 'invalid option '"-$OPTARG"
+                ;;
+            :)
+                fatal 'option '"-$OPTARG"' requires and argument'
+                ;;
+        esac
+    done
+
+    local hash_of_target="$(sha256sum "$PATH_TO_TARGET")"
+    hash_of_target="${hash_of_target%% *}"
+
+    case $MODE in
+        "track")
+            trackfile "$PATH_TO_TARGET" "$hash_of_target"
+            ;;
+        "check")
+            checkfile "$PATH_TO_TARGET" "$hash_of_target"
+            ;;
+        "update")
+            updatefile "$PATH_TO_TARGET" "$hash_of_target"
+            ;;
+        "")
+            fatal 'no mode specified'
+            ;;
+        *)
+            fatal 'invalid mode specified: '"$MODE"
+            ;;
+    esac
+}
+
+main "$@"
+
